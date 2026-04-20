@@ -50,7 +50,9 @@ TOKEN_ADDRESSES = {
     (StablecoinType.USDC, CryptoNetwork.BSC): "0x8AC76a51cc950d9822D68b83fE1Ad97B32Cd580d",
     (StablecoinType.USDT, CryptoNetwork.SOLANA): "Es9v8Fr2zT7w4s9eHvyJ7fK7q2mXeB3qmZ9N5dR3fW5J",
     (StablecoinType.USDT, CryptoNetwork.ETHEREUM): "0xdAC17F958D2ee523a2206206994597C13D831ec7",
+    (StablecoinType.USDT, CryptoNetwork.BASE): "0x50c49a256A5F7C6e5eE38774aF1BD3a4a0B4c5E6",  # USDbC (bridged USDT on Base)
     (StablecoinType.USD1, CryptoNetwork.BSC): "0x8020.bedrock",  # Placeholder
+    (StablecoinType.USD1, CryptoNetwork.BASE): "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",  # USDC proxy on Base
 }
 
 
@@ -86,13 +88,23 @@ class StablecoinHandler:
 
         # Fallback: direct deposit address (for self-hosted)
         return CryptoPaymentResult(
-            deposit_address=self._get_deposit_address(request.network),
+            deposit_address=self.get_deposit_address(request.network),
             amount_usd=request.amount_usd,
             coin=request.coin,
             network=request.network,
         )
 
-    def _get_deposit_address(self, network: CryptoNetwork) -> str:
+    def get_supported_networks(self) -> dict:
+        """List all supported networks with their features."""
+        return {
+            CryptoNetwork.SOLANA: {"name": "Solana", "fees": "$0.01", "speed": "~1s", "coins": ["USDC", "USDT"]},
+            CryptoNetwork.BASE: {"name": "Base", "fees": "$0.01", "speed": "~2s", "coins": ["USDC", "USDbC", "USD1"]},
+            CryptoNetwork.ETHEREUM: {"name": "Ethereum", "fees": "$1-5", "speed": "~15s", "coins": ["USDC", "USDT"]},
+            CryptoNetwork.BSC: {"name": "BSC", "fees": "$0.05", "speed": "~3s", "coins": ["USDC", "USD1"]},
+            CryptoNetwork.POLYGON: {"name": "Polygon", "fees": "$0.01", "speed": "~2s", "coins": ["USDC"]},
+        }
+
+    def get_deposit_address(self, network: CryptoNetwork) -> str:
         """Get deposit address from env vars per network."""
         env_map = {
             CryptoNetwork.SOLANA: "BONANZA_SOLANA_ADDRESS",
