@@ -100,16 +100,24 @@ class BonanzaX402Server:
         # Service discovery (Agentic.Market compatible)
         @app.get("/.well-known/x402")
         def x402_discovery():
-            return {
-                "services": [
-                    {
+            # Build discovery from route configs
+            services = []
+            for path, config in BONANZA_X402_ROUTES.items():
+                try:
+                    desc = getattr(config, 'description', path)
+                    price_amount = getattr(config.price, 'amount', config.price)
+                    amount_str = str(getattr(price_amount, 'amount', '0'))
+                    net = getattr(price_amount, 'network', 'base')
+                    services.append({
                         "path": path,
-                        "description": config.description,
-                        "price_usdc": f"${int(config.price.amount.amount) / 1_000_000:.4f}",
-                        "network": config.price.amount.network if hasattr(config.price.amount, 'network') else "base",
-                    }
-                    for path, config in BONANZA_X402_ROUTES.items()
-                ],
+                        "description": desc if isinstance(desc, str) else path,
+                        "price_usdc": f"${int(amount_str) / 1_000_000:.4f}",
+                        "network": net,
+                    })
+                except Exception:
+                    services.append({"path": path, "description": path, "price_usdc": "unknown", "network": "base"})
+            return {
+                "services": services,
                 "receiver": self.receiver_address or "not_configured",
                 "x402_version": X402_VERSION,
             }
