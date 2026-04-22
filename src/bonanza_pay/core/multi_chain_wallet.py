@@ -157,6 +157,80 @@ class MultiChainWallet:
         
         return instructions.get(network.value, {})
 
+    def create_withdrawal(self, from_network: ChainNetwork, to_address: str, amount_usd: float, coin: str = None) -> dict:
+        """Create a withdrawal from agent wallet to external wallet.
+        
+        For large incoming payments, sweep funds to a cold wallet.
+        """
+        wallet = self.load_wallet(from_network)
+        if not wallet:
+            return {"error": f"No wallet for {from_network.value}"}
+
+        coin = coin or wallet["coin"]
+
+        withdrawal = {
+            "from_address": wallet["address"],
+            "to_address": to_address,
+            "amount_usd": amount_usd,
+            "coin": coin,
+            "network": from_network.value,
+            "token_address": wallet.get("token_address", ""),
+            "gas_coin": wallet.get("gas_coin", "SOL" if from_network == ChainNetwork.SOLANA else "ETH"),
+            "status": "pending",
+            "requires_gas": from_network != ChainNetwork.SOLANA,  # EVM needs gas
+        }
+
+        # Save withdrawal record
+        withdrawals_dir = self.wallet_dir / "withdrawals"
+        withdrawals_dir.mkdir(exist_ok=True)
+        from datetime import datetime, timezone
+        withdrawal_id = f"wd_{int(datetime.now(timezone.utc).timestamp())}"
+        withdrawal["id"] = withdrawal_id
+        withdrawal["created_at"] = datetime.now(timezone.utc).isoformat()
+
+        with open(withdrawals_dir / f"{withdrawal_id}.json", 'w') as f:
+            json.dump(withdrawal, f, indent=2)
+
+        return withdrawal
+
+    def sweep_to_cold_wallet(self, cold_wallet_address: str, min_amount: float = 50.0) -> list[dict]:
+        """Sweep all balances above min_amount to a cold wallet.
+        
+        Use this for security: keep only operational funds in hot wallets,
+        sweep large amounts to cold storage.
+        """
+        results = []
+        for network in ChainNetwork:
+            wallet = self.load_wallet(network)
+            if not wallet:
+                continue
+
+            balance = wallet.get("balance", 0.0)
+            if balance >= min_amount:
+                result = self.create_withdrawal(
+                    from_network=network,
+                    to_address=cold_wallet_address,
+                    amount_usd=balance,
+                )
+                results.append(result)
+
+        return results
+
+    def set_cold_wallet(self, address: str) -> dict:
+        """Set the cold wallet address for automatic sweeps."""
+        config = {"cold_wallet_address": address}
+        with open(self.wallet_dir / "cold_wallet.json", 'w') as f:
+            json.dump(config, f, indent=2)
+        return {"cold_wallet": address, "status": "configured"}
+
+    def get_cold_wallet(self) -> Optional[str]:
+        """Get the configured cold wallet address."""
+        path = self.wallet_dir / "cold_wallet.json"
+        if path.exists():
+            with open(path) as f:
+                return json.load(f).get("cold_wallet_address")
+        return None
+
     def check_policy(self, amount_usd: float, policy: PaymentPolicy) -> dict:
         """Check if a payment is allowed by policy."""
         if amount_usd > policy.max_per_transaction:
@@ -244,6 +318,56 @@ def main():
         amount = float(sys.argv[2]) if len(sys.argv) > 2 else 0.50
         result = wallet.check_policy(amount, policy)
         print(json.dumps(result, indent=2))
+
+    elif cmd == "withdraw":
+        # bonanza-wallet withdraw <network> <to_address> <amount>
+        network = sys.argv[2] if len(sys.argv) > 2 else "solana"
+        to_address = sys.argv[3] if len(sys.argv) > 3 else ""
+        amount = float(sys.argv[4]) if len(sys.argv) > 4 else 0.0
+        if not to_address:
+            print("Usage: bonanza-wallet withdraw <network> <to_address> <amount>")
+            return
+        result = wallet.create_withdrawal(ChainNetwork(network), to_address, amount)
+        print(json.dumps(result, indent=2))
+
+    elif cmd == "sweep":
+        # bonanza-wallet sweep <cold_wallet_address> [min_amount]
+        cold_address = sys.argv[2] if len(sys.argv) > 2 else ""
+        min_amount = float(sys.argv[3]) if len(sys.argv) > 3 else 50.0
+        if not cold_address:
+            # Check if cold wallet is configured
+            cold_address = wallet.get_cold_wallet() or ""
+        if not cold_address:
+            print("Usage: bonanza-wallet sweep <cold_wallet_address> [min_amount]")
+            print("  Or configure: bonanza-wallet set-cold <address>")
+            return
+        results = wallet.sweep_to_cold_wallet(cold_address, min_amount)
+        for r in results:
+            status = "✅" if r.get("id") else "❌"
+            print(f"  {status} {r.get('network')}: {r.get('amount_usd')} {r.get('coin')} → {r.get('to_address', '')[:20]}...")
+
+    elif cmd == "set-cold":
+        address = sys.argv[2] if len(sys.argv) > 2 else ""
+        if not address:
+            print("Usage: bonanza-wallet set-cold <address>")
+            return
+        result = wallet.set_cold_wallet(address)
+        print(json.dumps(result, indent=2))
+
+    else:
+        print("""
+Bonanza Multi-Chain Wallet
+
+Commands:
+  generate [solana|base|bsc|all]  Generate wallets
+  list                             List all wallets
+  fund [solana|base|bsc|all]      Show funding instructions
+  policy [amount]                  Check payment policy
+  withdraw <net> <addr> <amt>     Withdraw to external wallet
+  sweep <addr> [min_amount]        Sweep large balances to cold wallet
+  set-cold <address>               Configure cold wallet address
+
+Networks: solana, base, bsc""")
 
 
 if __name__ == "__main__":
